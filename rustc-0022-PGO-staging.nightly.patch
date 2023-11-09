@@ -1,0 +1,222 @@
+From 6e7d63bd55a7fb2b1014aaeab9e16cbdc9a6b700 Mon Sep 17 00:00:00 2001
+From: Chris Wailes <chriswailes@google.com>
+Date: Mon, 12 Sep 2022 13:20:47 -0700
+Subject: [PATCH] Update PGO staging logic for static LLVM linkage
+
+This commit updates the logic around PGO staging when linking LLVM
+statically to ensure that the necessary runtime libraries are included.
+In addition, several flags related to PGO can now be specified in the
+config.toml file.
+---
+ src/bootstrap/compile.rs | 28 ++++++++++++++++++-------
+ src/bootstrap/config.rs  | 45 ++++++++++++++++++++++++++--------------
+ src/bootstrap/flags.rs   | 10 +++------
+ src/bootstrap/llvm.rs    |  8 +++----
+ 4 files changed, 55 insertions(+), 36 deletions(-)
+
+diff --git a/src/bootstrap/compile.rs b/src/bootstrap/compile.rs
+index c28fe9022ec..507ac298b8e 100644
+--- a/src/bootstrap/compile.rs
++++ b/src/bootstrap/compile.rs
+@@ -778,8 +778,10 @@ fn run(self, builder: &Builder<'_>) {
+             cargo.rustflag("-Clink-args=-Wl,--icf=all");
+         }
+ 
+-        let is_collecting = if let Some(path) = &builder.config.rust_profile_generate {
+-            if compiler.stage == 1 {
++        let use_relative_paths = if let Some(path) = &builder.config.rust_profile_generate {
++            if compiler.stage >= 1
++                || (builder.config.llvm_profile_generate.is_some() && !builder.llvm_link_shared())
++            {
+                 cargo.rustflag(&format!("-Cprofile-generate={}", path));
+                 // Apparently necessary to avoid overflowing the counters during
+                 // a Cargo build profile
+@@ -788,18 +790,28 @@ fn run(self, builder: &Builder<'_>) {
+             } else {
+                 false
+             }
+-        } else if let Some(path) = &builder.config.rust_profile_use {
+-            if compiler.stage == 1 {
+-                cargo.rustflag(&format!("-Cprofile-use={}", path));
+-                cargo.rustflag("-Cllvm-args=-pgo-warn-missing-function");
++        } else if let Some(path) = &builder.config.llvm_profile_generate {
++            // If libLLVM.a is instrumented it will need to be linked against
++            // the profiler's runtime environment.  The only way to ensure that
++            // occurs is to tell rustc to profile the compilation unit.
++            if !builder.llvm_link_shared() {
++                cargo.rustflag(&format!("-Cprofile-generate={}", path));
++                // Apparently necessary to avoid overflowing the counters during
++                // a Cargo build profile
++                cargo.rustflag("-Cllvm-args=-vp-counters-per-site=4");
+                 true
+             } else {
+                 false
+             }
++        } else if let Some(path) = &builder.config.rust_profile_use {
++            cargo.rustflag(&format!("-Cprofile-use={}", path));
++            cargo.rustflag("-Cllvm-args=-pgo-warn-missing-function");
++            true
+         } else {
+             false
+         };
+-        if is_collecting {
++
++        if use_relative_paths {
+             // Ensure paths to Rust sources are relative, not absolute.
+             cargo.rustflag(&format!(
+                 "-Cllvm-args=-static-func-strip-dirname-prefix={}",
+@@ -966,7 +978,7 @@ fn rustc_llvm_env(builder: &Builder<'_>, cargo: &mut Cargo, target: TargetSelect
+     // found. This is to avoid the linker errors about undefined references to
+     // `__llvm_profile_instrument_memop` when linking `rustc_driver`.
+     let mut llvm_linker_flags = String::new();
+-    if builder.config.llvm_profile_generate && target.contains("msvc") {
++    if builder.config.llvm_profile_generate.is_some() && target.contains("msvc") {
+         if let Some(ref clang_cl_path) = builder.config.llvm_clang_cl {
+             // Add clang's runtime library directory to the search path
+             let clang_rt_dir = get_clang_cl_resource_dir(clang_cl_path);
+diff --git a/src/bootstrap/config.rs b/src/bootstrap/config.rs
+index c59df7eecf6..4b6ca4c7f50 100644
+--- a/src/bootstrap/config.rs
++++ b/src/bootstrap/config.rs
+@@ -150,6 +150,12 @@ pub struct Config {
+     pub llvm_ldflags: Option<String>,
+     pub llvm_use_libcxx: bool,
+ 
++    pub llvm_profile_use: Option<String>,
++    pub llvm_profile_generate: Option<String>,
++    pub llvm_libunwind_default: Option<LlvmLibunwind>,
++    pub llvm_bolt_profile_generate: bool,
++    pub llvm_bolt_profile_use: Option<String>,
++
+     // rust codegen options
+     pub rust_optimize: bool,
+     pub rust_codegen_units: Option<u32>,
+@@ -178,11 +184,6 @@ pub struct Config {
+     pub rust_profile_generate: Option<String>,
+     pub rust_lto: RustcLto,
+     pub rust_validate_mir_opts: Option<u32>,
+-    pub llvm_profile_use: Option<String>,
+-    pub llvm_profile_generate: bool,
+-    pub llvm_libunwind_default: Option<LlvmLibunwind>,
+-    pub llvm_bolt_profile_generate: bool,
+-    pub llvm_bolt_profile_use: Option<String>,
+ 
+     pub build: TargetSelection,
+     pub hosts: Vec<TargetSelection>,
+@@ -781,6 +782,10 @@ struct Llvm {
+         enable_warnings: Option<bool> = "enable-warnings",
+         download_ci_llvm: Option<StringOrBool> = "download-ci-llvm",
+         build_config: Option<HashMap<String, String>> = "build-config",
++        profile_generate: Option<String> = "profile-generate",
++        profile_use: Option<String> = "profile-use",
++        bolt_profile_generate: Option<bool> = "bolt-profile-generate",
++        bolt_profile_use: Option<String> = "bolt-profile-use",
+     }
+ }
+ 
+@@ -969,17 +974,6 @@ fn parse_inner(args: &[String], get_toml: impl Fn(&Path) -> TomlConfig) -> Confi
+         config.keep_stage_std = flags.keep_stage_std;
+         config.color = flags.color;
+         config.free_args = std::mem::take(&mut flags.free_args);
+-        config.llvm_profile_use = flags.llvm_profile_use;
+-        config.llvm_profile_generate = flags.llvm_profile_generate;
+-        config.llvm_bolt_profile_generate = flags.llvm_bolt_profile_generate;
+-        config.llvm_bolt_profile_use = flags.llvm_bolt_profile_use;
+-
+-        if config.llvm_bolt_profile_generate && config.llvm_bolt_profile_use.is_some() {
+-            eprintln!(
+-                "Cannot use both `llvm_bolt_profile_generate` and `llvm_bolt_profile_use` at the same time"
+-            );
+-            detail_exit_macro!(1);
+-        }
+ 
+         // Infer the rest of the configuration.
+ 
+@@ -1380,7 +1374,19 @@ fn get_table(option: &str) -> Result<TomlConfig, toml::de::Error> {
+                 // the link step) with each stage.
+                 config.llvm_link_shared.set(Some(true));
+             }
++
++            config.llvm_profile_generate = flags.llvm_profile_generate.or(llvm.profile_generate);
++            config.llvm_profile_use = flags.llvm_profile_use.or(llvm.profile_use);
++
++            config.llvm_bolt_profile_generate = flags.llvm_bolt_profile_generate;
++            config.llvm_bolt_profile_use = flags.llvm_bolt_profile_use.or(llvm.bolt_profile_use);
+         } else {
++            config.llvm_profile_generate = flags.llvm_profile_generate;
++            config.llvm_profile_use = flags.llvm_profile_use;
++
++            config.llvm_bolt_profile_generate = flags.llvm_bolt_profile_generate;
++            config.llvm_bolt_profile_use = flags.llvm_bolt_profile_use;
++
+             config.llvm_from_ci =
+                 config.channel == "dev" && crate::llvm::is_ci_llvm_available(&config, false);
+         }
+@@ -1428,6 +1434,13 @@ fn get_table(option: &str) -> Result<TomlConfig, toml::de::Error> {
+             }
+         }
+ 
++        if config.llvm_bolt_profile_generate && config.llvm_bolt_profile_use.is_some() {
++            eprintln!(
++                "Cannot use both `llvm_bolt_profile_generate` and `llvm_bolt_profile_use` at the same time"
++            );
++            detail_exit_macro!(1);
++        }
++
+         if config.llvm_from_ci {
+             let triple = &config.build.triple;
+             let ci_llvm_bin = config.ci_llvm_root().join("bin");
+diff --git a/src/bootstrap/flags.rs b/src/bootstrap/flags.rs
+index dc05f47ee9c..fb167f6f654 100644
+--- a/src/bootstrap/flags.rs
++++ b/src/bootstrap/flags.rs
+@@ -139,16 +139,12 @@ pub struct Flags {
+     /// use PGO profile for rustc build
+     #[arg(global(true), value_hint = clap::ValueHint::FilePath, long, value_name = "PROFILE")]
+     pub rust_profile_use: Option<String>,
++    /// generate PGO profile with LLVM build
++    #[arg(global(true), value_hint = clap::ValueHint::FilePath, long, value_name = "PROFILE")]
++    pub llvm_profile_generate:  Option<String>,
+     /// use PGO profile for LLVM build
+     #[arg(global(true), value_hint = clap::ValueHint::FilePath, long, value_name = "PROFILE")]
+     pub llvm_profile_use: Option<String>,
+-    // LLVM doesn't support a custom location for generating profile
+-    // information.
+-    //
+-    // llvm_out/build/profiles/ is the location this writes to.
+-    /// generate PGO profile with llvm built for rustc
+-    #[arg(global(true), long)]
+-    pub llvm_profile_generate: bool,
+     /// generate BOLT profile for LLVM build
+     #[arg(global(true), long)]
+     pub llvm_bolt_profile_generate: bool,
+diff --git a/src/bootstrap/llvm.rs b/src/bootstrap/llvm.rs
+index 19e595650cf..f04bc665902 100644
+--- a/src/bootstrap/llvm.rs
++++ b/src/bootstrap/llvm.rs
+@@ -332,11 +332,9 @@ fn run(self, builder: &Builder<'_>) -> LlvmResult {
+         // This flag makes sure `FileCheck` is copied in the final binaries directory.
+         cfg.define("LLVM_INSTALL_UTILS", "ON");
+ 
+-        if builder.config.llvm_profile_generate {
++        if let Some(path) = &builder.config.llvm_profile_generate {
+             cfg.define("LLVM_BUILD_INSTRUMENTED", "IR");
+-            if let Ok(llvm_profile_dir) = std::env::var("LLVM_PROFILE_DIR") {
+-                cfg.define("LLVM_PROFILE_DATA_DIR", llvm_profile_dir);
+-            }
++            cfg.define("LLVM_PROFILE_DATA_DIR", &path);
+             cfg.define("LLVM_BUILD_RUNTIME", "No");
+         }
+         if let Some(path) = builder.config.llvm_profile_use.as_ref() {
+@@ -825,7 +823,7 @@ fn run(self, builder: &Builder<'_>) -> PathBuf {
+         // when doing PGO on CI, cmake or clang-cl don't automatically link clang's
+         // profiler runtime in. In that case, we need to manually ask cmake to do it, to avoid
+         // linking errors, much like LLVM's cmake setup does in that situation.
+-        if builder.config.llvm_profile_generate && target.contains("msvc") {
++        if builder.config.llvm_profile_generate.is_some() && target.contains("msvc") {
+             if let Some(clang_cl_path) = builder.config.llvm_clang_cl.as_ref() {
+                 // Find clang's runtime library directory and push that as a search path to the
+                 // cmake linker flags.
+-- 
+2.40.1
+

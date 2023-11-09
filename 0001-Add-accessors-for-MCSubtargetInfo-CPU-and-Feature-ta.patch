@@ -1,0 +1,28 @@
+From 223faa220592cb8baaa60b69609d7769573f0764 Mon Sep 17 00:00:00 2001
+From: Cameron Hart <cameron.hart@gmail.com>
+Date: Sun, 10 Jul 2016 23:55:53 +1000
+Subject: [PATCH] Add accessors for MCSubtargetInfo CPU and Feature tables
+
+This is needed for `-C target-cpu=help` and `-C target-feature=help` in rustc
+---
+ llvm/include/llvm/MC/MCSubtargetInfo.h | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/llvm/include/llvm/MC/MCSubtargetInfo.h b/llvm/include/llvm/MC/MCSubtargetInfo.h
+index 943486ac1..dbae79293 100644
+--- a/llvm/include/llvm/MC/MCSubtargetInfo.h
++++ b/llvm/include/llvm/MC/MCSubtargetInfo.h
+@@ -234,6 +234,10 @@ public:
+     return ProcDesc;
+   }
+ 
++  ArrayRef<SubtargetFeatureKV> getFeatureTable() const {
++    return ProcFeatures;
++  }
++
+   virtual unsigned getHwMode() const { return 0; }
+ 
+   /// Return the cache size in bytes for the given level of cache.
+-- 
+2.40.1
+

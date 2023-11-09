@@ -1,0 +1,26 @@
+From 9653997bc920f7887519c46045dfa2178ce2d2e5 Mon Sep 17 00:00:00 2001
+From: Chris Wailes <chriswailes@google.com>
+Date: Fri, 10 Mar 2023 14:10:30 -0800
+Subject: [PATCH] Add 'trusty' to an expected error message
+
+Change-Id: I33bfbb69dfe9bd8a3c5e1587847090d2f787ebbb
+---
+ tests/ui/check-cfg/well-known-values.stderr | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tests/ui/check-cfg/well-known-values.stderr b/tests/ui/check-cfg/well-known-values.stderr
+index 2d18cb82e03..ef1d49ac453 100644
+--- a/tests/ui/check-cfg/well-known-values.stderr
++++ b/tests/ui/check-cfg/well-known-values.stderr
+@@ -6,7 +6,7 @@ LL | #[cfg(target_os = "linuz")]
+    |                   |
+    |                   help: there is a expected value with a similar name: `"linux"`
+    |
+-   = note: expected values for `target_os` are: `aix`, `android`, `cuda`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `hermit`, `horizon`, `illumos`, `ios`, `l4re`, `linux`, `macos`, `netbsd`, `none`, `nto`, `openbsd`, `psp`, `redox`, `solaris`, `solid_asp3`, `tvos`, `uefi`, `unknown`, `vita`, `vxworks`, `wasi`, `watchos`, `windows`, `xous`
++   = note: expected values for `target_os` are: `aix`, `android`, `cuda`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `hermit`, `horizon`, `illumos`, `ios`, `l4re`, `linux`, `macos`, `netbsd`, `none`, `nto`, `openbsd`, `psp`, `redox`, `solaris`, `solid_asp3`, `trusty`, `tvos`, `uefi`, `unknown`, `vita`, `vxworks`, `wasi`, `watchos`, `windows`, `xous`
+    = note: `#[warn(unexpected_cfgs)]` on by default
+ 
+ warning: unexpected `cfg` condition value
+-- 
+2.40.1
+

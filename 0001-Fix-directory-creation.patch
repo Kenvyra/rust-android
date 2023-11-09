@@ -1,0 +1,29 @@
+From 184171e210eb4ffaae3d1e15178216125c1f70df Mon Sep 17 00:00:00 2001
+From: Jens Reidel <adrian@travitia.xyz>
+Date: Sun, 11 Jun 2023 05:34:15 +0200
+Subject: [PATCH] Fix directory creation
+
+Signed-off-by: Jens Reidel <adrian@travitia.xyz>
+---
+ build.py | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/build.py b/build.py
+index 5cc582e..b1559a7 100755
+--- a/build.py
++++ b/build.py
+@@ -355,7 +355,10 @@ def main(argv=None) -> None:
+         for stdlib in STDLIB_SOURCES:
+             shutil.copytree(OUT_PATH_RUST_SOURCE / stdlib, OUT_PATH_STDLIB_SRCS / stdlib)
+         # TODO(b/271885049) Remove after Soong build doesn't use it anymore
+-        os.makedirs(OUT_PATH_STDLIB_SRCS_LEGACY.parent)
++        try:
++            os.makedirs(OUT_PATH_STDLIB_SRCS_LEGACY.parent)
++        except FileExistsError:
++            pass
+         os.symlink(OUT_PATH_STDLIB_SRCS_LEGACY_RELATIVE,
+                    OUT_PATH_STDLIB_SRCS_LEGACY, target_is_directory=True)
+ 
+-- 
+2.40.1
+
